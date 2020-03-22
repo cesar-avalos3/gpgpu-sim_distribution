@@ -19,6 +19,9 @@ typedef std::list<gpgpu_ptx_sim_arg> gpgpu_ptx_sim_arg_list_t;
 typedef unsigned long GLuint;
 #endif
 
+// Keep a hash table of allocated data
+#include <unordered_map>
+
 struct glbmap_entry {
   GLuint m_bufferObj;
   void *m_devPtr;
@@ -175,6 +178,9 @@ class cuda_runtime_api {
     g_glbmap = NULL;
     g_active_device = 0;  // active gpu that runs the code
     gpgpu_ctx = ctx;
+    alloc_num = 0;
+    k_num = 0;
+    is_init = false;
   }
   // global list
   std::list<cuobjdumpSection *> cuobjdumpSectionList;
@@ -213,5 +219,24 @@ class cuda_runtime_api {
   int load_static_globals(symbol_table *symtab, unsigned min_gaddr,
                           unsigned max_gaddr, gpgpu_t *gpu);
   int load_constants(symbol_table *symtab, addr_t min_gaddr, gpgpu_t *gpu);
+
+  // Wave skipping?
+  bool wave_skipping;
+
+  // Checkpointing enabled?
+  bool checkpointing_enabled;
+
+  // Directory for snapshots
+  char *checkpoints_dir;
+
+  // Map for allocated data
+  int alloc_num;
+  std::unordered_map<void *, int> alloc_map;
+
+  // Integer list of kernels to skip
+  bool is_init;
+  int k_num;
+  char *checkpoints;
+  std::vector<int> checkpoint_list;
 };
 #endif /* __cuda_api_object_h__ */

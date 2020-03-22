@@ -31,6 +31,7 @@
 #include <float.h>
 #include <limits.h>
 #include <string.h>
+#include <algorithm>
 #include "../../libcuda/gpgpu_context.h"
 #include "../cuda-sim/cuda-sim.h"
 #include "../cuda-sim/ptx-stats.h"
@@ -691,6 +692,8 @@ void shader_core_stats::visualizer_print(gzFile visualizer_file) {
   }
   gzprintf(visualizer_file, "\n");
 
+  gzprintf(visualizer_file, "ctas_completed: %d\n", ctas_completed);
+  ctas_completed = 0;
   // warp issue breakdown
   unsigned sid = m_config->gpgpu_warp_issue_shader;
   unsigned count = 0;
@@ -1597,6 +1600,10 @@ void shader_core_ctx::warp_inst_complete(const warp_inst_t &inst) {
 
   m_stats->m_num_sim_winsn[m_sid]++;
   m_gpu->gpu_sim_insn += inst.active_count();
+  // Delayed insn stat update
+  if(m_gpu->get_gpu_delayed_cta_opt() >= m_gpu->get_completed_cta()){
+    m_gpu->gpu_delayed_insn += inst.active_count();
+  }
   inst.completed(m_gpu->gpu_tot_sim_cycle + m_gpu->gpu_sim_cycle);
 }
 
@@ -2512,6 +2519,7 @@ void shader_core_ctx::register_cta_thread_exit(unsigned cta_num,
   m_cta_status[cta_num]--;
   if (!m_cta_status[cta_num]) {
     // Increment the completed CTAs
+    m_stats->ctas_completed++;
     m_gpu->inc_completed_cta();
     m_n_active_cta--;
     m_barriers.deallocate_barrier(cta_num);
@@ -2578,6 +2586,7 @@ void gpgpu_sim::shader_print_runtime_stat(FILE *fout) {
 
 void gpgpu_sim::shader_print_scheduler_stat(FILE *fout,
                                             bool print_dynamic_info) const {
+  fprintf(fout, "ctas_completed %d, ", m_shader_stats->ctas_completed);
   // Print out the stats from the sampling shader core
   const unsigned scheduler_sampling_core =
       m_shader_config->gpgpu_warp_issue_shader;
@@ -3046,10 +3055,16 @@ unsigned int shader_core_config::max_cta(const kernel_info_t &k) const {
   // Limit by CTA
   unsigned int result_cta = max_cta_per_core;
 
+  /*
   unsigned result = result_thread;
   result = gs_min2(result, result_shmem);
   result = gs_min2(result, result_regs);
   result = gs_min2(result, result_cta);
+
+  */
+  // Look how much nicer C++11 is...
+  unsigned result =
+      std::min({result_thread, result_shmem, result_regs, result_cta});
 
   static const struct gpgpu_ptx_sim_info *last_kinfo = NULL;
   if (last_kinfo !=
