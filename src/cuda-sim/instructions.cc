@@ -63,17 +63,33 @@ using half_float::half;
 const char *g_opcode_string[NUM_OPCODES] = {
 #define OP_DEF(OP, FUNC, STR, DST, CLASSIFICATION) STR,
 #define OP_W_DEF(OP, FUNC, STR, DST, CLASSIFICATION) STR,
+#define SPARSE 1
+#define CLASSIQUE 0
 #include "opcodes.def"
 #undef OP_DEF
 #undef OP_W_DEF
 };
+
 // Using profiled information::check the TensorCoreMatrixArrangement.xls for
 // details
+// A lot to unpack here
+// A threadgroup is made up of 4 threads, two threadgroups make a worktuple (alteratively named an octet)
+// Each threadgroup can calculate a 4x4 (sub)matrix MAC (D = [A * B] + C)
+// An octet is made up of threadgroups i and i+4.
+// Four octets calculate the entire 16x16 matrix D = [A*B] + C.
 unsigned thread_group_offset(int thread, unsigned wmma_type,
-                             unsigned wmma_layout, unsigned type, int stride) {
+                             unsigned wmma_layout, unsigned type, int stride, int sparse) {
   unsigned offset;
+  // Member each octet is made up of two threadgroups
+  // therefore for example, row TG_0 = 0 and   TG_4 = 64
+  //                        row TG_1 = 128 and TG_5 = 128+64 = 192
+  //                        row TG_2 = 0 and   TG_6 = 64 + 0 = 64
+  //                        row TG_3 = 128 and TG_7 = 128+64 = 192
   unsigned load_a_row[8] = {0, 128, 0, 128, 64, 192, 64, 192};
   unsigned load_a_col[8] = {0, 8, 0, 8, 4, 12, 4, 12};
+  // This is refers to the position in a 16x16 matrix
+  unsigned load_a_data_matrix[8] = {0,4,0,4,2,8,2,8};
+  unsigned load_a_offset_matrix[8] = {};
   unsigned load_b_row[8] = {0, 8, 0, 8, 4, 12, 4, 12};
   unsigned load_b_col[8] = {0, 128, 0, 128, 64, 192, 64, 192};
   unsigned load_c_float_row[8] = {0, 128, 8, 136, 64, 192, 72, 200};
@@ -1809,7 +1825,7 @@ void mapping(int thread, int wmma_type, int wmma_layout, int type, int index,
   int c_inside_row_offset[] = {0, 0, 2, 2, 0, 0, 2, 2};
   int c_inside_col_offset[] = {0, 1, 0, 1, 4, 5, 4, 5};
 
-  offset = thread_group_offset(thread, wmma_type, wmma_layout, type, stride);
+  offset = thread_group_offset(thread, wmma_type, wmma_layout, type, stride, CLASSIQUE);
 
   if (wmma_type == LOAD_A) {
     if (wmma_layout == ROW) {
@@ -3423,7 +3439,7 @@ void mma_st_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
       printf("mma_st: thrd=%d, addr=%x, fp(size=%zu), stride=%d\n", thrd,
              addr_reg.u32, size, src2_data.u32);
     addr_t new_addr =
-        addr + thread_group_offset(thrd, wmma_type, wmma_layout, type, stride) *
+        addr + thread_group_offset(thrd, wmma_type, wmma_layout, type, stride,CLASSIQUE) *
                    size / 8;
     addr_t push_addr;
 
@@ -3542,7 +3558,7 @@ void mma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
              src1_data.u32, size, src2_data.u32);
 
     addr_t new_addr =
-        addr + thread_group_offset(thrd, wmma_type, wmma_layout, type, stride) *
+        addr + thread_group_offset(thrd, wmma_type, wmma_layout, type, stride,CLASSIQUE) *
                    size / 8;
     addr_t fetch_addr;
     new_addr_type mem_txn_addr[MAX_ACCESSES_PER_INSN_PER_THREAD];

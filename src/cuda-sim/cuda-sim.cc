@@ -937,6 +937,7 @@ void ptx_instruction::set_opcode_and_latency() {
       op = SFU_OP;
       break;
     case MMA_OP:
+    case SHMMA_OP:
       latency = tensor_latency;
       initiation_interval = tensor_init;
       op = TENSOR_CORE_OP;
@@ -1688,7 +1689,7 @@ static unsigned get_tex_datasize(const ptx_instruction *pI,
 
 int tensorcore_op(int inst_opcode) {
   if ((inst_opcode == MMA_OP) || (inst_opcode == MMA_LD_OP) ||
-      (inst_opcode == MMA_ST_OP))
+      (inst_opcode == MMA_ST_OP) || (inst_opcode == SHMMA_LD_OP) || (inst_opcode == SHMMA_ST_OP) || (inst_opcode == SHMMA_OP))
     return 1;
   else
     return 0;

@@ -167,6 +167,8 @@ breakaddr  TC; yylval->int_value = BREAKADDR_OP; return OPCODE;
 
 <INITIAL,NOT_OPCODE,IN_INST,IN_FUNC_DECL>{
 \.a\.sync TC; yylval->int_value = LOAD_A; return WMMA_DIRECTIVE;
+\.a_sparse\.sync TC; yylval->int_value = LOAD_SPARSE_A; return WMMA_DIRECTIVE;
+\.offset\.sync TC; yylval->int_value = LOAD_OFFSET; return WMMA_DIRECTIVE;
 \.b\.sync TC; yylval->int_value = LOAD_B; return WMMA_DIRECTIVE;
 \.c\.sync TC; yylval->int_value = LOAD_C; return WMMA_DIRECTIVE;
 \.d\.sync TC; yylval->int_value = STORE_D; return WMMA_DIRECTIVE;

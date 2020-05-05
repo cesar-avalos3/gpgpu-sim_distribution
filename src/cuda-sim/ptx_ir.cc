@@ -1239,6 +1239,8 @@ ptx_instruction::ptx_instruction(
       case LOAD_B:
       case LOAD_C:
       case STORE_D:
+      case LOAD_SPARSE_A:
+      case LOAD_OFFSET:
       case MMA:
         m_wmma_type = last_ptx_inst_option;
         break;
