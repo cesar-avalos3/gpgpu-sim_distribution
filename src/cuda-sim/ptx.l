@@ -173,6 +173,7 @@ breakaddr  TC; yylval->int_value = BREAKADDR_OP; return OPCODE;
 \.c\.sync TC; yylval->int_value = LOAD_C; return WMMA_DIRECTIVE;
 \.d\.sync TC; yylval->int_value = STORE_D; return WMMA_DIRECTIVE;
 \.mma\.sync TC;yylval->int_value=MMA; return WMMA_DIRECTIVE;
+\.mma_make_it_so\.sync TC;yylval->int_value=MMA_MAKE_IT_SO; return WMMA_DIRECTIVE;
 
 \.row TC; yylval->int_value = ROW; return LAYOUT;
 \.col TC; yylval->int_value = COL; return LAYOUT;

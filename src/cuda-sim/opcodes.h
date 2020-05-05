@@ -73,6 +73,7 @@ enum wmma_type {
   M32N8K16,
   M8N32K16,
   LOAD_OFFSET,
-  LOAD_SPARSE_A
+  LOAD_SPARSE_A,
+  MMA_MAKE_IT_SO
 };
 #endif

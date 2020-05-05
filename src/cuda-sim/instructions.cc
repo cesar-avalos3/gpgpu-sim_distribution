@@ -1867,10 +1867,11 @@ void mapping(int thread, int wmma_type, int wmma_layout, int type, int index,
   }
 }
 
-void mma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
+void smma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
   int i, j, k, thrd;
   int row, col, offset;
   ptx_reg_t matrix_a[16][16];
+  ptx_reg_t matrix_offset[16][16];
   ptx_reg_t matrix_b[16][16];
   ptx_reg_t matrix_c[16][16];
   ptx_reg_t matrix_d[16][16];
@@ -1881,6 +1882,247 @@ void mma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
   unsigned b_layout = pI->get_wmma_layout(1);
   unsigned type = pI->get_type();
   unsigned type2 = pI->get_type2();
+  int sparsity = pI->get_wmma_sparse(); // Find out if we in sparse mode or not.
+  int tid;
+  const operand_info &dst = pI->operand_lookup(0);
+
+  if (core->get_gpu()->is_functional_sim())
+    tid = inst.warp_id_func() * core->get_warp_size();
+  else
+    tid = inst.warp_id() * core->get_warp_size();
+  float temp;
+  half temp2;
+
+  for (thrd = 0; thrd < core->get_warp_size(); thrd++) {
+    thread = core->get_thread_info()[tid + thrd];
+    if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
+      printf("THREAD=%d\n:", thrd);
+    for (int operand_num = 1; operand_num <= 3; operand_num++) {
+      const operand_info &src_a = pI->operand_lookup(operand_num);
+      unsigned nelem = src_a.get_vect_nelem();
+      ptx_reg_t v[8];
+      thread->get_vector_operand_values(src_a, v, nelem);
+      if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+        printf("Thread%d_Iteration=%d\n:", thrd, operand_num);
+        for (k = 0; k < nelem; k++) {
+          printf("%llx ", v[k].u64);
+        }
+        printf("\n");
+      }
+      ptx_reg_t nw_v[16];
+      int hex_val;
+
+      if (!((operand_num == 3) && (type2 == F32_TYPE))) {
+        for (k = 0; k < 2 * nelem; k++) {
+          if (k % 2 == 1)
+            hex_val = (v[k / 2].s64 & 0xffff);
+          else
+            hex_val = ((v[k / 2].s64 & 0xffff0000) >> 16);
+          nw_v[k].f16 = *((half *)&hex_val);
+        }
+      }
+      if (!((operand_num == 3) && (type2 == F32_TYPE))) {
+        for (k = 0; k < 2 * nelem; k++) {
+          temp = nw_v[k].f16;
+          if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
+            printf("%.2f ", temp);
+        }
+        if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) printf("\n");
+      } else {
+        if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+          for (k = 0; k < 8; k++) {
+            printf("%.2f ", v[k].f32);
+          }
+          printf("\n");
+        }
+      }
+      switch (operand_num) {
+        case 1:  // operand 1
+          for (k = 0; k < 8; k++) {
+            mapping(thrd, LOAD_A, a_layout, F16_TYPE, k, 16, row, col, offset);
+            if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
+              printf("A:thread=%d,row=%d,col=%d,offset=%d\n", thrd, row, col,
+                     offset);
+            matrix_a[row][col] = nw_v[offset];
+          }
+          break;
+        case 2:  // operand 2
+          for (k = 0; k < 8; k++) {
+            mapping(thrd, LOAD_B, b_layout, F16_TYPE, k, 16, row, col, offset);
+            if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
+              printf("B:thread=%d,row=%d,col=%d,offset=%d\n", thrd, row, col,
+                     offset);
+            matrix_b[row][col] = nw_v[offset];
+          }
+          break;
+        case 3:  // operand 3
+          for (k = 0; k < 8; k++) {
+            mapping(thrd, LOAD_C, ROW, type2, k, 16, row, col, offset);
+            if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
+              printf("C:thread=%d,row=%d,col=%d,offset=%d\n", thrd, row, col,
+                     offset);
+            if (type2 != F16_TYPE) {
+              matrix_c[row][col] = v[offset];
+            } else {
+              matrix_c[row][col] = nw_v[offset];
+            }
+          }
+          break;
+        default:
+          printf("Invalid Operand Index\n");
+      }
+    }
+    if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) printf("\n");
+  }
+  if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+    printf("MATRIX_A\n");
+    for (i = 0; i < 16; i++) {
+      for (j = 0; j < 16; j++) {
+        temp = matrix_a[i][j].f16;
+        printf("%.2f ", temp);
+      }
+      printf("\n");
+    }
+    printf("MATRIX_B\n");
+    for (i = 0; i < 16; i++) {
+      for (j = 0; j < 16; j++) {
+        temp = matrix_b[i][j].f16;
+        printf("%.2f ", temp);
+      }
+      printf("\n");
+    }
+    printf("MATRIX_C\n");
+    for (i = 0; i < 16; i++) {
+      for (j = 0; j < 16; j++) {
+        if (type2 == F16_TYPE) {
+          temp = matrix_c[i][j].f16;
+          printf("%.2f ", temp);
+        } else
+          printf("%.2f ", matrix_c[i][j].f32);
+      }
+      printf("\n");
+    }
+  }
+  for (i = 0; i < 16; i++) {
+    for (j = 0; j < 16; j++) {
+      matrix_d[i][j].f16 = 0;
+    }
+  }
+
+  for (i = 0; i < 16; i++) {
+    for (j = 0; j < 16; j++) {
+      for (k = 0; k < 16; k++) {
+        matrix_d[i][j].f16 =
+            matrix_d[i][j].f16 + matrix_a[i][k].f16 * matrix_b[k][j].f16;
+      }
+      if ((type == F16_TYPE) && (type2 == F16_TYPE))
+        matrix_d[i][j].f16 += matrix_c[i][j].f16;
+      else if ((type == F32_TYPE) && (type2 == F16_TYPE)) {
+        temp2 = matrix_d[i][j].f16 + matrix_c[i][j].f16;
+        temp = temp2;
+        matrix_d[i][j].f32 = temp;
+      } else if ((type == F16_TYPE) && (type2 == F32_TYPE)) {
+        temp = matrix_d[i][j].f16;
+        temp += matrix_c[i][j].f32;
+        matrix_d[i][j].f16 = half(temp);
+      } else {
+        temp = matrix_d[i][j].f16;
+        temp += matrix_c[i][j].f32;
+        matrix_d[i][j].f32 = temp;
+      }
+    }
+  }
+  if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+    printf("MATRIX_D\n");
+    for (i = 0; i < 16; i++) {
+      for (j = 0; j < 16; j++) {
+        if (type == F16_TYPE) {
+          temp = matrix_d[i][j].f16;
+          printf("%.2f ", temp);
+        } else
+          printf("%.2f ", matrix_d[i][j].f32);
+      }
+      printf("\n");
+    }
+  }
+  for (thrd = 0; thrd < core->get_warp_size(); thrd++) {
+    int row_t[8];
+    int col_t[8];
+    for (k = 0; k < 8; k++) {
+      mapping(thrd, LOAD_C, ROW, type, k, 16, row_t[k], col_t[k], offset);
+      if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
+        printf("mma:store:row:%d,col%d\n", row_t[k], col_t[k]);
+    }
+    thread = core->get_thread_info()[tid + thrd];
+
+    if (type == F32_TYPE) {
+      thread->set_wmma_vector_operand_values(
+          dst, matrix_d[row_t[0]][col_t[0]], matrix_d[row_t[1]][col_t[1]],
+          matrix_d[row_t[2]][col_t[2]], matrix_d[row_t[3]][col_t[3]],
+          matrix_d[row_t[4]][col_t[4]], matrix_d[row_t[5]][col_t[5]],
+          matrix_d[row_t[6]][col_t[6]], matrix_d[row_t[7]][col_t[7]]);
+
+      if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+        printf("thread%d:", thrd);
+        for (k = 0; k < 8; k++) {
+          printf("%.2f ", matrix_d[row_t[k]][col_t[k]].f32);
+        }
+        printf("\n");
+      }
+    } else if (type == F16_TYPE) {
+      if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+        printf("thread%d:", thrd);
+        for (k = 0; k < 8; k++) {
+          temp = matrix_d[row_t[k]][col_t[k]].f16;
+          printf("%.2f ", temp);
+        }
+        printf("\n");
+
+        printf("thread%d:", thrd);
+        for (k = 0; k < 8; k++) {
+          printf("%x ", (unsigned int)matrix_d[row_t[k]][col_t[k]].f16);
+        }
+        printf("\n");
+      }
+      ptx_reg_t nw_data1, nw_data2, nw_data3, nw_data4;
+      nw_data1.s64 = ((matrix_d[row_t[0]][col_t[0]].s64 & 0xffff)) |
+                     ((matrix_d[row_t[1]][col_t[1]].s64 & 0xffff) << 16);
+      nw_data2.s64 = ((matrix_d[row_t[2]][col_t[2]].s64 & 0xffff)) |
+                     ((matrix_d[row_t[3]][col_t[3]].s64 & 0xffff) << 16);
+      nw_data3.s64 = ((matrix_d[row_t[4]][col_t[4]].s64 & 0xffff)) |
+                     ((matrix_d[row_t[5]][col_t[5]].s64 & 0xffff) << 16);
+      nw_data4.s64 = ((matrix_d[row_t[6]][col_t[6]].s64 & 0xffff)) |
+                     ((matrix_d[row_t[7]][col_t[7]].s64 & 0xffff) << 16);
+      thread->set_vector_operand_values(dst, nw_data1, nw_data2, nw_data3,
+                                        nw_data4);
+      if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
+        printf("thread%d=%llx,%llx,%llx,%llx", thrd, nw_data1.s64, nw_data2.s64,
+               nw_data3.s64, nw_data4.s64);
+
+    } else {
+      printf("wmma:mma:wrong type\n");
+      abort();
+    }
+  }
+}
+
+void mma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
+  int i, j, k, thrd;
+  int row, col, offset;
+  ptx_reg_t matrix_a[16][16];
+  ptx_reg_t matrix_data[16][16];
+  ptx_reg_t matrix_offset[16][16];
+  ptx_reg_t matrix_b[16][16];
+  ptx_reg_t matrix_c[16][16];
+  ptx_reg_t matrix_d[16][16];
+  ptx_reg_t src_data;
+  ptx_thread_info *thread;
+
+  unsigned a_layout = pI->get_wmma_layout(0);
+  unsigned b_layout = pI->get_wmma_layout(1);
+  unsigned type = pI->get_type();
+  unsigned type2 = pI->get_type2();
+  int sparsity = pI->get_wmma_sparse(); // Find out if we in sparse mode or not.
   int tid;
   const operand_info &dst = pI->operand_lookup(0);
 
@@ -3580,6 +3822,15 @@ void mma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
         }
         if (i % 2 == 0) mem_txn_addr[num_mem_txn++] = fetch_addr;
       }
+    } else if(wmma_type == LOAD_SPARSE_A) {
+      for (i = 0; i < 16; i++)
+      {
+        // We are assuming row-wise operations
+        // We are also assuming K = 4
+        // TODO: Introduce the parameter of K
+        fetch_addr = new_addr + 2 * i;
+        mem->read(fetch_addr, size / 8, &data[i].s64);
+      }
     } else if (wmma_type == LOAD_B) {
       for (i = 0; i < 16; i++) {
         if (wmma_layout == COL) {
@@ -3612,6 +3863,12 @@ void mma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
           } else {
             printf("mma_ld:wrong_type\n");
             abort();
+          }
+        } else if (type == LOAD_OFFSET) {
+          for(i = 0; i < 16; i++)
+          {
+            fetch_addr = new_addr + 2 * i;
+            mem_read(fetch_addr, size/8, &data[i].s64);
           }
         } else if (type == F32_TYPE) {
           // mem->read(new_addr+4*acc_float_offset(i,wmma_layout,stride),size/8,&data[i].s64);

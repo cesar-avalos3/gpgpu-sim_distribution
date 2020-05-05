@@ -1239,11 +1239,15 @@ ptx_instruction::ptx_instruction(
       case LOAD_B:
       case LOAD_C:
       case STORE_D:
-      case LOAD_SPARSE_A:
-      case LOAD_OFFSET:
       case MMA:
         m_wmma_type = last_ptx_inst_option;
+        m_wmma_sparse = 0;
         break;
+      case LOAD_SPARSE_A:
+      case LOAD_OFFSET:
+      case MMA_MAKE_IT_SO:
+        m_wmma_type = last_ptx_inst_option;
+        m_wmma_sparse = 1;
       case ROW:
       case COL:
         m_wmma_layout[rr++] = last_ptx_inst_option;
