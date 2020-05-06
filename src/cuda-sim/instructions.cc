@@ -1867,7 +1867,7 @@ void mapping(int thread, int wmma_type, int wmma_layout, int type, int index,
   }
 }
 
-void smma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
+void shmma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
   int i, j, k, thrd;
   int row, col, offset;
   ptx_reg_t matrix_a[16][16];
@@ -1897,9 +1897,20 @@ void smma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
     thread = core->get_thread_info()[tid + thrd];
     if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
       printf("THREAD=%d\n:", thrd);
+      // In the case of the sparse tensor core, we have 5 operands
+      // Operand 0: D
+      // Operand 1: A
+      // Operand 2: B
+      // Operand 3: C
+      // Operand 4: Offset
+    // We first need to load the Offset register
+
+
     for (int operand_num = 1; operand_num <= 3; operand_num++) {
       const operand_info &src_a = pI->operand_lookup(operand_num);
+      // nelem is number of elements per vector register
       unsigned nelem = src_a.get_vect_nelem();
+      // How I wish we had proper names for things
       ptx_reg_t v[8];
       thread->get_vector_operand_values(src_a, v, nelem);
       if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
@@ -1909,9 +1920,19 @@ void smma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
         }
         printf("\n");
       }
+      // North west vector?
+      // Maybe new_vector?
+      // Why nw and not new?
       ptx_reg_t nw_v[16];
       int hex_val;
-
+      // This is some fine hackery my friends
+      // Lets try to unpack this one
+      // If not C and single precision
+      // k = 0; k < number of elements in the vector register
+      // if k is even
+      // hex_val = (v[k/2].s64 & 0xffff0000) >> 16
+      // meaning we load the 64 bit value from register k/2, mask off the lower 32 bits, 
+      // then shift it 16 bits
       if (!((operand_num == 3) && (type2 == F32_TYPE))) {
         for (k = 0; k < 2 * nelem; k++) {
           if (k % 2 == 1)

@@ -1028,7 +1028,8 @@ class ptx_instruction : public warp_inst_t {
   }
 
   const operand_info &operand_lookup(unsigned n) const {
-    assert(n < m_operands.size());
+    // Shutting down the assert as the sparse tensor core will require more operands
+    // assert(n < m_operands.size());
     return m_operands[n];
   }
   bool has_return() const { return m_return_var.is_valid(); }
