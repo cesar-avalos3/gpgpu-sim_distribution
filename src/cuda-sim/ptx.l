@@ -80,6 +80,9 @@ brkpt   TC; yylval->int_value = BRKPT_OP; return OPCODE;
 wmma	TC; yylval->int_value = MMA_OP; return OPCODE;
 wmma\.load	TC; yylval->int_value = MMA_LD_OP; return OPCODE;
 wmma\.store 	TC; yylval->int_value = MMA_ST_OP; return OPCODE;
+swmma    TC; yylval->int_value = SWMMA_OP; return OPCODE;
+swmma\.load      TC; yylval->int_value = SWMMA_LD_OP; return OPCODE;
+swmma\.offset     TC; yylval->int_value = SWMMA_LD_OP; return OPCODE;
 
 call	TC; BEGIN(NOT_OPCODE); yylval->int_value = CALL_OP; return OPCODE; // blocking opcode token in case the callee has the same name as an opcode
 callp   TC; BEGIN(NOT_OPCODE); yylval->int_value = CALLP_OP; return OPCODE;

@@ -748,7 +748,6 @@ void ptx_instruction::set_opcode_and_latency() {
     case LD_OP:
       op = LOAD_OP;
       break;
-    case SWMMA_LD_OP:
     case MMA_LD_OP:
       op = TENSOR_CORE_LOAD_OP;
       break;
@@ -1072,7 +1071,7 @@ void ptx_instruction::pre_decode() {
       break;
     default:
       // if( m_opcode == LD_OP || m_opcode == LDU_OP )
-      if (m_opcode == MMA_LD_OP || m_opcode ==SWMMA_LD_OP || m_opcode == LD_OP || m_opcode == LDU_OP)
+      if (m_opcode == MMA_LD_OP || m_opcode == LD_OP || m_opcode == LDU_OP)
         cache_op = CACHE_ALL;
       // else if( m_opcode == ST_OP )
       else if (m_opcode == MMA_ST_OP || m_opcode == ST_OP)
@@ -1690,7 +1689,7 @@ static unsigned get_tex_datasize(const ptx_instruction *pI,
 
 int tensorcore_op(int inst_opcode) {
   if ((inst_opcode == MMA_OP) || (inst_opcode == MMA_LD_OP) ||
-      (inst_opcode == MMA_ST_OP) || (inst_opcode == SWMMA_LD_OP) || (inst_opcode == SWMMA_OP))
+      (inst_opcode == MMA_ST_OP) || (inst_opcode == SHMMA_LD_OP) || (inst_opcode == SHMMA_ST_OP) || (inst_opcode == SHMMA_OP))
     return 1;
   else
     return 0;
@@ -1935,7 +1934,7 @@ void ptx_thread_info::ptx_exec_inst(warp_inst_t &inst, unsigned lane_id) {
 
     // "Return values"
     if (!skip) {
-      if (!((inst_opcode == MMA_LD_OP || inst_opcode ==SWMMA_LD_OP || inst_opcode == MMA_ST_OP))) {
+      if (!((inst_opcode == MMA_LD_OP || inst_opcode == MMA_ST_OP))) {
         inst.space = insn_space;
         inst.set_addr(lane_id, insn_memaddr);
         inst.data_size = insn_data_size;  // simpleAtomicIntrinsics

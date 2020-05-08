@@ -1867,7 +1867,7 @@ void mapping(int thread, int wmma_type, int wmma_layout, int type, int index,
   }
 }
 
-void shmma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
+void swmma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
   int i, j, k, thrd;
   int row, col, offset;
   ptx_reg_t matrix_a[16][16];
@@ -3772,6 +3772,171 @@ void mma_st_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
   }
 }
 
+void swmma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
+  size_t size;
+  int t, i;
+  unsigned smid;
+  const operand_info &dst = pI->dst();
+  const operand_info &src1 = pI->src1();
+  const operand_info &src2 = pI->src2();
+
+  unsigned type = F16_TYPE;
+  unsigned wmma_type = pI->get_wmma_type(); //need to change for loadA and load offset
+  unsigned wmma_layout = ROW;
+  int tid;
+  int thrd, stride;
+  ptx_thread_info *thread;
+
+  if (core->get_gpu()->is_functional_sim())
+    tid = inst.warp_id_func() * core->get_warp_size();
+  else
+    tid = inst.warp_id() * core->get_warp_size();
+
+  _memory_op_t insn_memory_op =
+      pI->has_memory_read() ? memory_load : memory_store;
+
+  for (thrd = 0; thrd < core->get_warp_size(); thrd++) {
+    thread = core->get_thread_info()[tid + thrd];
+    ptx_reg_t src1_data =
+        thread->get_operand_value(src1, dst, U32_TYPE, thread, 1);
+    ptx_reg_t src2_data =
+        thread->get_operand_value(src2, dst, U32_TYPE, thread, 1);
+    stride = src2_data.u32;
+    memory_space_t space = pI->get_space();
+
+    memory_space *mem = NULL;
+    addr_t addr = src1_data.u32;
+    smid = thread->get_hw_sid();
+    if (whichspace(addr) == shared_space) {
+      addr = generic_to_shared(smid, addr);
+      space = shared_space;
+    }
+
+    decode_space(space, thread, src1, mem, addr);
+    type_info_key::type_decode(type, size, t);
+
+    ptx_reg_t data[16];
+    if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
+      printf("mma_ld: thrd=%d,addr=%x, fpsize=%zu, stride=%d\n", thrd,
+             src1_data.u32, size, src2_data.u32);
+
+    addr_t new_addr =     //for threadgroup address
+        addr + thread_group_offset(thrd, wmma_type, wmma_layout, type, stride) *
+                   size / 8;
+    addr_t fetch_addr;
+    new_addr_type mem_txn_addr[MAX_ACCESSES_PER_INSN_PER_THREAD];
+    int num_mem_txn = 0;
+
+    if (wmma_type == LOAD_A) {
+      for (i = 0; i < 16; i++) { //for column change 16 to 4
+        if (wmma_layout == ROW) {
+          // mem->read(new_addr+2*i,size/8,&data[i].s64);
+          fetch_addr = new_addr + 2 * i;  //for each thread
+          mem->read(fetch_addr, size / 8, &data[i].s64);
+        } else {
+          printf("mma_ld:wrong_layout_type\n");
+          abort();
+        }
+        if (i % 2 == 0) mem_txn_addr[num_mem_txn++] = fetch_addr;
+      }
+    }
+    //else if (wmma_type == LOAD_OFFSET) {
+
+   // }
+    else {
+      printf("wrong wmma type\n");
+      ;
+      abort();
+    }
+    // generate timing memory request
+    inst.space = space;
+    inst.set_addr(thrd, (new_addr_type *)mem_txn_addr, num_mem_txn);
+
+    inst.data_size = 4;  // 4 byte transaction
+    assert(inst.memory_op == insn_memory_op);
+
+    if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+      if (type == F16_TYPE) {
+        printf("\nmma_ld:thread%d= ", thrd);
+        for (i = 0; i < 16; i++) {
+          printf("%llx ", data[i].u64);
+        }
+        printf("\n");
+
+        printf("\nmma_ld:thread%d= ", thrd);
+        float temp;
+        for (i = 0; i < 16; i++) {
+          temp = data[i].f16;
+          printf("%.2f ", temp);
+        }
+        printf("\n");
+      } else {
+        printf("\nmma_ld:thread%d= ", thrd);
+        for (i = 0; i < 8; i++) {
+          printf("%.2f ", data[i].f32);
+        }
+        printf("\n");
+        printf("\nmma_ld:thread%d= ", thrd);
+        for (i = 0; i < 8; i++) {
+          printf("%llx ", data[i].u64);
+        }
+        printf("\n");
+      }
+    }
+
+
+      ptx_reg_t nw_data[8];
+      int num_reg;
+
+
+        num_reg = 8;
+
+      for (i = 0; i < num_reg; i++) {
+        nw_data[i].s64 = ((data[2 * i].s64 & 0xffff) << 16) |
+                         ((data[2 * i + 1].s64 & 0xffff));
+      }
+
+
+      thread->set_wmma_vector_operand_values(
+            dst, nw_data[0], nw_data[1], nw_data[2], nw_data[3], nw_data[4],
+            nw_data[5], nw_data[6], nw_data[7]);
+      if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+        printf(
+            "mma_ld:data[0].s64=%llx,data[1].s64=%llx,new_data[0].s64=%llx\n",
+            data[0].u64, data[1].u64, nw_data[0].u64);
+        printf(
+            "mma_ld:data[2].s64=%llx,data[3].s64=%llx,new_data[1].s64=%llx\n",
+            data[2].u64, data[3].u64, nw_data[1].u64);
+        printf(
+            "mma_ld:data[4].s64=%llx,data[5].s64=%llx,new_data[2].s64=%llx\n",
+            data[4].u64, data[5].u64, nw_data[2].u64);
+        printf(
+            "mma_ld:data[6].s64=%llx,data[7].s64=%llx,new_data[3].s64=%llx\n",
+            data[6].u64, data[7].u64, nw_data[3].u64);
+        if (wmma_type != LOAD_C) {
+          printf(
+              "mma_ld:data[8].s64=%llx,data[9].s64=%llx,new_data[4].s64=%llx\n",
+              data[8].u64, data[9].u64, nw_data[4].s64);
+          printf(
+              "mma_ld:data[10].s64=%llx,data[11].s64=%llx,new_data[5].s64=%"
+              "llx\n",
+              data[10].u64, data[11].u64, nw_data[5].u64);
+          printf(
+              "mma_ld:data[12].s64=%llx,data[13].s64=%llx,new_data[6].s64=%"
+              "llx\n",
+              data[12].u64, data[13].u64, nw_data[6].u64);
+          printf(
+              "mma_ld:data[14].s64=%llx,data[15].s64=%llx,new_data[7].s64=%"
+              "llx\n",
+              data[14].u64, data[15].u64, nw_data[3].u64);
+        }
+      }
+
+
+    // thread->m_last_effective_address = addr;
+    // thread->m_last_memory_space = space;
+  }
+}
 void mma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
   size_t size;
   int t, i;

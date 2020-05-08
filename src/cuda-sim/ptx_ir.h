@@ -1095,7 +1095,7 @@ class ptx_instruction : public warp_inst_t {
 
   bool has_memory_read() const {
     if (m_opcode == LD_OP || m_opcode == LDU_OP || m_opcode == TEX_OP ||
-        m_opcode == MMA_LD_OP)
+        m_opcode == MMA_LD_OP || m_opcode == SWMMA_LD_OP)
       return true;
     // Check PTXPlus operand type below
     // Source operands are memory operands
