@@ -938,7 +938,7 @@ void ptx_instruction::set_opcode_and_latency() {
       op = SFU_OP;
       break;
     case MMA_OP:
-    case SHMMA_OP:
+    case SWMMA_OP:
       latency = tensor_latency;
       initiation_interval = tensor_init;
       op = TENSOR_CORE_OP;
@@ -1750,7 +1750,7 @@ void ptx_thread_info::ptx_exec_inst(warp_inst_t &inst, unsigned lane_id) {
       }
 
       if (((inst_opcode == MMA_OP || inst_opcode == SWMMA_OP || inst_opcode == MMA_LD_OP ||
-            inst_opcode == MMA_ST_OP inst_opcode == SWMMA_LD_OP))) {
+            inst_opcode == MMA_ST_OP || inst_opcode == SWMMA_LD_OP))) {
         if (inst.active_count() != MAX_WARP_SIZE) {
           printf(
               "Tensor Core operation are warp synchronous operation. All the "

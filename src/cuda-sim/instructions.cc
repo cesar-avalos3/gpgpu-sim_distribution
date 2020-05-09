@@ -78,7 +78,7 @@ const char *g_opcode_string[NUM_OPCODES] = {
 // An octet is made up of threadgroups i and i+4.
 // Four octets calculate the entire 16x16 matrix D = [A*B] + C.
 unsigned thread_group_offset(int thread, unsigned wmma_type,
-                             unsigned wmma_layout, unsigned type, int stride, int sparse) {
+                             unsigned wmma_layout, unsigned type, int stride) {
   unsigned offset;
   // Member each octet is made up of two threadgroups
   // therefore for example, row TG_0 = 0 and   TG_4 = 64
@@ -3702,7 +3702,7 @@ void mma_st_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
       printf("mma_st: thrd=%d, addr=%x, fp(size=%zu), stride=%d\n", thrd,
              addr_reg.u32, size, src2_data.u32);
     addr_t new_addr =
-        addr + thread_group_offset(thrd, wmma_type, wmma_layout, type, stride,CLASSIQUE) *
+        addr + thread_group_offset(thrd, wmma_type, wmma_layout, type, stride) *
                    size / 8;
     addr_t push_addr;
 
@@ -3781,7 +3781,7 @@ void swmma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
   const operand_info &src2 = pI->src2();
 
   unsigned type = F16_TYPE;
-  unsigned wmma_type = pI->get_wmma_type(); //need to change for loadA and load offset
+  unsigned wmma_type = pI->get_swmma_type(); //need to change for loadA and load offset
   unsigned wmma_layout = ROW;
   int tid;
   int thrd, stride;
@@ -3820,9 +3820,9 @@ void swmma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
       printf("mma_ld: thrd=%d,addr=%x, fpsize=%zu, stride=%d\n", thrd,
              src1_data.u32, size, src2_data.u32);
 
-    addr_t new_addr =     //for threadgroup address
+    addr_t new_addr =
         addr + thread_group_offset(thrd, wmma_type, wmma_layout, type, stride) *
-                   size / 8;
+                   size / 8;  //for threadgroup
     addr_t fetch_addr;
     new_addr_type mem_txn_addr[MAX_ACCESSES_PER_INSN_PER_THREAD];
     int num_mem_txn = 0;
@@ -3986,7 +3986,7 @@ void mma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
              src1_data.u32, size, src2_data.u32);
 
     addr_t new_addr =
-        addr + thread_group_offset(thrd, wmma_type, wmma_layout, type, stride,CLASSIQUE) *
+        addr + thread_group_offset(thrd, wmma_type, wmma_layout, type, stride) *
                    size / 8;
     addr_t fetch_addr;
     new_addr_type mem_txn_addr[MAX_ACCESSES_PER_INSN_PER_THREAD];
@@ -4054,7 +4054,7 @@ void mma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
           for(i = 0; i < 16; i++)
           {
             fetch_addr = new_addr + 2 * i;
-            mem_read(fetch_addr, size/8, &data[i].s64);
+            mem->read(fetch_addr, size/8, &data[i].s64);
           }
         } else if (type == F32_TYPE) {
           // mem->read(new_addr+4*acc_float_offset(i,wmma_layout,stride),size/8,&data[i].s64);
