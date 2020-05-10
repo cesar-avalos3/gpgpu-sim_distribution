@@ -3019,12 +3019,18 @@ void cuda_runtime_api::extract_ptx_files_using_cuobjdump(CUctx_st *context) {
       // int pos = line.find(std::string(get_app_binary_name(app_binary)));
       const char *ptx_file = line.c_str();
       printf("Extracting specific PTX file named %s \n", ptx_file);
+      // Hacky way of preventing the PTX files from being re-compiled
+      // We can add any instructions we want
+			// This requires the use of a system variable called "PTX_SIM_USE_PTX_FILE"
+			// to be set, if you unset it, then the program will recompile the ptxses
+			if(getenv("PTX_SIM_USE_PTX_FILE") == NULL){
       snprintf(command, 1000, "$CUDA_INSTALL_PATH/bin/cuobjdump -xptx %s %s",
                ptx_file, app_binary.c_str());
       if (system(command) != 0) {
         printf("ERROR: command: %s failed \n", command);
         exit(0);
       }
+			}
       context->no_of_ptx++;
     }
   }
