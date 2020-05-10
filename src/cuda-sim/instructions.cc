@@ -3774,6 +3774,7 @@ void mma_st_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
 
 void swmma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
   size_t size;
+  size_t size_offset;
   int t, i;
   unsigned smid;
   const operand_info &dst = pI->dst();
@@ -3781,10 +3782,13 @@ void swmma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
   const operand_info &src2 = pI->src2();
 
   unsigned type = F16_TYPE;
-  unsigned wmma_type = pI->get_swmma_type(); //need to change for loadA and load offset
-  unsigned wmma_layout = ROW;
+  unsigned type_offset = U8_TYPE;
+  unsigned wmma_type = pI->get_wmma_type(); // load A or offset
+  unsigned wmma_layout = pI->get_wmma_layout(0);  // only support row major
+  int K = 4;  // TODO: change K from input
   int tid;
   int thrd, stride;
+  int stride_offset;
   ptx_thread_info *thread;
 
   if (core->get_gpu()->is_functional_sim())
@@ -3796,12 +3800,13 @@ void swmma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
       pI->has_memory_read() ? memory_load : memory_store;
 
   for (thrd = 0; thrd < core->get_warp_size(); thrd++) {
-    thread = core->get_thread_info()[tid + thrd];
+    thread = core->get_thread_info()[tid + thrd]; // Global threadid
     ptx_reg_t src1_data =
-        thread->get_operand_value(src1, dst, U32_TYPE, thread, 1);
+        thread->get_operand_value(src1, dst, U32_TYPE, thread, 1);  // one reg oprand of two reg oprand
     ptx_reg_t src2_data =
-        thread->get_operand_value(src2, dst, U32_TYPE, thread, 1);
+        thread->get_operand_value(src2, dst, U32_TYPE, thread, 1);  // one reg oprand of two reg oprand
     stride = src2_data.u32;
+    stride_offset = src2_data.u32;
     memory_space_t space = pI->get_space();
 
     memory_space *mem = NULL;
@@ -3812,26 +3817,28 @@ void swmma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
       space = shared_space;
     }
 
-    decode_space(space, thread, src1, mem, addr);
-    type_info_key::type_decode(type, size, t);
+    decode_space(space, thread, src1, mem, addr); // Get memory
+    type_info_key::type_decode(type, size, t);  // for each element. size/8 = #Bytes
+    type_info_key::type_decode(type_offset, size, t);  // for each element of offset. size/8 = #Bytes
 
-    ptx_reg_t data[16];
+    ptx_reg_t data[4]; // 4-len FP16 for A
+    ptx_reg_t offset; // for 4 offsets, each is 4-bit
     if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
       printf("mma_ld: thrd=%d,addr=%x, fpsize=%zu, stride=%d\n", thrd,
              src1_data.u32, size, src2_data.u32);
 
-    addr_t new_addr =
-        addr + thread_group_offset(thrd, wmma_type, wmma_layout, type, stride) *
-                   size / 8;  //for threadgroup
+    addr_t new_addr;
     addr_t fetch_addr;
     new_addr_type mem_txn_addr[MAX_ACCESSES_PER_INSN_PER_THREAD];
     int num_mem_txn = 0;
 
-    if (wmma_type == LOAD_A) {
-      for (i = 0; i < 16; i++) { //for column change 16 to 4
+    if (wmma_type == LOAD_SPARSE_A) {
+      new_addr =
+        addr + thread_group_offset(thrd, wmma_type, wmma_layout, type, stride) *
+                   size / 8;  //for a threadgroup, units of bytes
+      for (i = 0; i < 4; i++) { // 16x4 A_nnz, 16x16 A, loop for every thread
         if (wmma_layout == ROW) {
-          // mem->read(new_addr+2*i,size/8,&data[i].s64);
-          fetch_addr = new_addr + 2 * i;  //for each thread
+          fetch_addr = new_addr + 2 * i;  // for each thread
           mem->read(fetch_addr, size / 8, &data[i].s64);
         } else {
           printf("mma_ld:wrong_layout_type\n");
@@ -3840,9 +3847,14 @@ void swmma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
         if (i % 2 == 0) mem_txn_addr[num_mem_txn++] = fetch_addr;
       }
     }
-    //else if (wmma_type == LOAD_OFFSET) {
-
-   // }
+    else if (wmma_type == LOAD_OFFSET) {
+      new_addr =
+        addr + thread_group_offset(thrd, wmma_type, wmma_layout, type_offset, stride) *
+                   size / 8;  //for a threadgroup, units of bytes
+      // 16x4 offset for 16x16 A, each offset element uses 4-bit. loop for every thread
+      fetch_addr = new_addr + 2 * i;  // for each thread
+      mem->read(fetch_addr, size / 8, &data[i].s64);
+   }
     else {
       printf("wrong wmma type\n");
       ;
@@ -3935,7 +3947,7 @@ void swmma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
 
     // thread->m_last_effective_address = addr;
     // thread->m_last_memory_space = space;
-  }
+  } // End warp
 }
 void mma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
   size_t size;
