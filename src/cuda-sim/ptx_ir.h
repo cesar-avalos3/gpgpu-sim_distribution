@@ -1038,7 +1038,6 @@ class ptx_instruction : public warp_inst_t {
   unsigned get_vector() const { return m_vector_spec; }
   unsigned get_atomic() const { return m_atomic_spec; }
 
-  int get_swmma_type() const { return m_swmma_type; }
   int get_wmma_type() const { return m_wmma_type; }
   int get_wmma_sparse() const {return m_wmma_sparse;}
   int get_wmma_layout(int index) const {
@@ -1154,7 +1153,6 @@ class ptx_instruction : public warp_inst_t {
   bool m_to_option;
   unsigned m_cache_option;
   int m_wmma_type;
-  int m_swmma_type;
   int m_wmma_sparse;
   int m_wmma_layout[2];
   int m_wmma_configuration;
