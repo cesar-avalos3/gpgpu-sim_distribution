@@ -161,6 +161,35 @@ unsigned thread_group_offset(int thread, unsigned wmma_type,
   return offset;
 }
 
+
+unsigned thread_group_offset_sparse(int thread, unsigned wmma_type,
+                             unsigned wmma_layout, unsigned type, int stride) {
+  unsigned offset;
+  // Member each octet is made up of two threadgroups
+  // New: because of 16x4 A_nnz
+  // therefore for example, row TG_0 = 0 and   TG_4 = 16
+  //                        row TG_1 = 32 and  TG_5 = 32+16 = 48
+  //                        row TG_2 = 0 and   TG_6 = 16
+  //                        row TG_3 = 32 and  TG_7 = 32+16 = 48
+  // by elements.
+  unsigned load_a_row[8] = {0, 32, 0, 32, 16, 48, 16, 48};
+  unsigned load_a_offset_matrix[8] = {};  //TODO
+  unsigned thread_group = thread / 4;
+  unsigned in_tg_index = thread % 4;
+
+  switch (wmma_type) {
+    case LOAD_SPARSE_A:
+      if (wmma_layout == ROW)
+        offset = load_a_row[thread_group] + 4 * in_tg_index;  // 16x4 A_nnz
+      break;
+    case LOAD_OFFSET:
+    default:
+      abort();
+  }
+  offset = (offset / 16) * stride + offset % 16;  // convert to bytes
+  return offset;
+}
+
 int acc_float_offset(int index, int wmma_layout, int stride) {
   int c_row_offset[] = {0, 1, 32, 33, 4, 5, 36, 37};
   int c_col_offset[] = {0, 16, 2, 18, 64, 80, 66, 82};
@@ -3774,7 +3803,118 @@ void mma_st_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
 
 void swmma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
   size_t size;
-  size_t size_offset;
+  int t, i;
+  unsigned smid;
+  const operand_info &dst = pI->dst();  // ra
+  const operand_info &src1 = pI->src1();  // [pa]
+
+  unsigned type = F16_TYPE;
+  unsigned wmma_type = LOAD_SPARSE_A; // load A
+  unsigned wmma_layout = pI->get_wmma_layout(0);  // only support row major now
+  int K = 4;  // TODO: change K from input
+  int stride = K; // TODO: not sure
+  int tid;
+  int thrd;
+  ptx_thread_info *thread;
+
+  if (core->get_gpu()->is_functional_sim())
+    tid = inst.warp_id_func() * core->get_warp_size();
+  else
+    tid = inst.warp_id() * core->get_warp_size();
+
+  _memory_op_t insn_memory_op =
+      pI->has_memory_read() ? memory_load : memory_store;
+
+  for (thrd = 0; thrd < core->get_warp_size(); thrd++) {
+    thread = core->get_thread_info()[tid + thrd]; // Global threadid
+    ptx_reg_t src1_data =
+        thread->get_operand_value(src1, dst, U32_TYPE, thread, 1);
+    memory_space_t space = pI->get_space();
+
+    memory_space *mem = NULL;
+    addr_t addr = src1_data.u32;
+    smid = thread->get_hw_sid();
+    if (whichspace(addr) == shared_space) {
+      addr = generic_to_shared(smid, addr);
+      space = shared_space;
+    }
+
+    decode_space(space, thread, src1, mem, addr); // Get memory
+    type_info_key::type_decode(type, size, t);  // for each element. size/8 = #Bytes
+
+    ptx_reg_t data[4]; // 4-len FP16 for A
+    if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
+      printf("mma_ld: thrd=%d,addr=%x, fpsize=%zu, stride=%d\n", thrd,
+             src1_data.u32, size, src2_data.u32);
+
+    addr_t new_addr = 
+      addr + thread_group_offset(thrd, wmma_type, wmma_layout, type, stride) *
+                     size / 8;  //for a threadgroup, units of bytes;
+    addr_t fetch_addr;
+    new_addr_type mem_txn_addr[MAX_ACCESSES_PER_INSN_PER_THREAD];
+    int num_mem_txn = 0;
+
+    for (i = 0; i < 4; i++) { // 16x4 A_nnz, 16x16 A, loop for every thread
+      if (wmma_layout == ROW) {
+        fetch_addr = new_addr + 2 * i;  // for each thread
+        mem->read(fetch_addr, size / 8, &data[i].s64);
+      } else {
+        printf("mma_ld:wrong_layout_type\n");
+        abort();
+      }
+      if (i % 2 == 0) mem_txn_addr[num_mem_txn++] = fetch_addr;
+    }
+    
+    // generate timing memory request
+    inst.space = space;
+    inst.set_addr(thrd, (new_addr_type *)mem_txn_addr, num_mem_txn);
+
+    inst.data_size = 4;  // 4 byte transaction
+    assert(inst.memory_op == insn_memory_op);
+
+    if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+      printf("\nmma_ld:thread%d= ", thrd);
+      for (i = 0; i < 16; i++) {
+        printf("%llx ", data[i].u64);
+      }
+      printf("\n");
+
+      printf("\nmma_ld:thread%d= ", thrd);
+      float temp;
+      for (i = 0; i < 16; i++) {
+        temp = data[i].f16;
+        printf("%.2f ", temp);
+      }
+      printf("\n");
+    }
+
+    ptx_reg_t nw_data[8]; // Put in register
+    int num_reg;
+    num_reg = 2;  // 4 FP16
+
+    for (i = 0; i < num_reg; i++) {
+      nw_data[i].s64 = ((data[2 * i].s64 & 0xffff) << 16) |
+                       ((data[2 * i + 1].s64 & 0xffff));
+    }
+
+    thread->set_wmma_vector_operand_values(
+          dst, nw_data[0], nw_data[1]); // num_reg = 2
+      if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+        printf(
+            "mma_ld:data[0].s64=%llx,data[1].s64=%llx,new_data[0].s64=%llx\n",
+            data[0].u64, data[1].u64, nw_data[0].u64);
+        printf(
+            "mma_ld:data[2].s64=%llx,data[3].s64=%llx,new_data[1].s64=%llx\n",
+            data[2].u64, data[3].u64, nw_data[1].u64);
+      }
+
+    // thread->m_last_effective_address = addr;
+    // thread->m_last_memory_space = space;
+  } // End warp
+}
+
+void swmma_ld_offset_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
+  size_t size;
   int t, i;
   unsigned smid;
   const operand_info &dst = pI->dst();
@@ -3949,6 +4089,7 @@ void swmma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
     // thread->m_last_memory_space = space;
   } // End warp
 }
+
 void mma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
   size_t size;
   int t, i;
