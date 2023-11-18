@@ -65,6 +65,9 @@
 #define SAMPLELOG 222
 #define DUMPLOG 333
 
+#define SIZE_IPC_AVERAGES 3000
+#define PKA_THRESHOLD 0.3
+
 class gpgpu_context;
 
 extern tr1_hash_map<new_addr_type, unsigned> address_random_interleaving;
@@ -574,6 +577,14 @@ class gpgpu_sim : public gpgpu_t {
 
   void perf_memcpy_to_gpu(size_t dst_start_addr, size_t count);
 
+  void print_pka_stats(unsigned int total_ctas);
+  float rolling_average(float *r, int n);
+  float variance(float *r, int n, float mu);
+  float std_dev(float *r, int n, float mu);
+  float get_cov();
+  bool pka_stable();
+  
+
   // The next three functions added to be used by the functional simulation
   // function
 
@@ -685,6 +696,8 @@ class gpgpu_sim : public gpgpu_t {
   unsigned gpu_sim_insn_last_update_sid;
   occupancy_stats gpu_occupancy;
   occupancy_stats gpu_tot_occupancy;
+  float ipc_averages[SIZE_IPC_AVERAGES];
+  unsigned int current_ipc_averages_idx;
 
   // performance counter for stalls due to congestion.
   unsigned int gpu_stall_dramfull;

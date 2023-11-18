@@ -955,6 +955,10 @@ gpgpu_sim::gpgpu_sim(const gpgpu_sim_config &config, gpgpu_context *ctx)
   partiton_replys_in_parallel = 0;
   partiton_replys_in_parallel_total = 0;
 
+  for(int i = 0; i < SIZE_IPC_AVERAGES; i++)
+    ipc_averages[i] = 999999990;
+  current_ipc_averages_idx = 0;
+
   m_memory_partition_unit =
       new memory_partition_unit *[m_memory_config->m_n_mem];
   m_memory_sub_partition =
@@ -1155,6 +1159,9 @@ void gpgpu_sim::update_stats() {
   m_total_cta_launched = 0;
   gpu_completed_cta = 0;
   gpu_occupancy = occupancy_stats();
+  for(int i = 0; i < SIZE_IPC_AVERAGES; i++)
+    ipc_averages[i] = 999999999;
+  current_ipc_averages_idx = 0;
 }
 
 PowerscalingCoefficients *gpgpu_sim::get_scaling_coeffs()
@@ -1980,6 +1987,10 @@ void gpgpu_sim::cycle() {
         ((gpu_sim_cycle + gpu_tot_sim_cycle) >= g_single_step)) {
       raise(SIGTRAP);  // Debug breakpoint
     }
+
+    ipc_averages[current_ipc_averages_idx] = (float) gpu_sim_insn / gpu_sim_cycle;
+    current_ipc_averages_idx = (current_ipc_averages_idx+1)%SIZE_IPC_AVERAGES;
+
     gpu_sim_cycle++;
 
     if (g_interactive_debugger_enabled) gpgpu_debug();
@@ -2180,3 +2191,57 @@ const shader_core_config *gpgpu_sim::getShaderCoreConfig() {
 const memory_config *gpgpu_sim::getMemoryConfig() { return m_memory_config; }
 
 simt_core_cluster *gpgpu_sim::getSIMTCluster() { return *m_cluster; }
+
+float gpgpu_sim::rolling_average(float *r, int n)
+{
+  float avg = 0;
+  for(int i = 0;i < n; i++)
+    avg += r[i];
+  return avg/n;
+}
+
+float gpgpu_sim::variance(float *r, int n, float mu)
+{
+  float var = 0;
+  for(int i = 0; i < n; i++)
+    var += (r[i] - mu) * (r[i] - mu);
+  return var/n;
+}
+
+float gpgpu_sim::std_dev(float *r, int n, float mu)
+{
+  return sqrt(variance(r,n,mu));
+}
+
+float gpgpu_sim::get_cov()
+{
+  float mean = rolling_average(ipc_averages, SIZE_IPC_AVERAGES);
+  float dev = std_dev(ipc_averages, SIZE_IPC_AVERAGES, mean);
+  float coefficient_of_variation = dev/mean;
+  return coefficient_of_variation;
+}
+
+bool gpgpu_sim::pka_stable()
+{
+  float coefficient_of_variation = get_cov();
+  if (((100.0 * coefficient_of_variation) < PKA_THRESHOLD) && 
+       (gpu_sim_cycle > 5000) && 
+      (m_shader_stats->ctas_completed > 32))
+        return true;
+  return false;
+}
+
+void gpgpu_sim::print_pka_stats(unsigned int total_ctas)
+{
+  std::cout << "------------------------ PKA -------------------- \n";
+  std::cout << "Ctas Completed: " << m_shader_stats->ctas_completed << "\n";
+  std::cout << "Ctas Total: " << total_ctas << "\n";
+  std::cout << "IPC: " << (float)gpu_sim_insn / gpu_sim_cycle << "\n";
+  float mean = rolling_average(ipc_averages, SIZE_IPC_AVERAGES);
+  float dev = std_dev(ipc_averages, SIZE_IPC_AVERAGES, mean);
+  float coefficient_of_variation = dev/mean;
+  std::cout << "CoV: " << coefficient_of_variation << "\n";
+  std::cout << "Projected Cycles: " << (total_ctas)/(m_shader_stats->ctas_completed * 1.0) * gpu_sim_cycle << "\n";
+  m_shader_stats->ctas_completed = 0; // Reset CTA's
+  std::cout << "------------------------ PKA -------------------- \n";
+}
