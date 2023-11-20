@@ -2221,12 +2221,12 @@ float gpgpu_sim::get_cov()
   return coefficient_of_variation;
 }
 
-bool gpgpu_sim::pka_stable()
+bool gpgpu_sim::pka_stable(unsigned int total_ctas)
 {
   float coefficient_of_variation = get_cov();
   if (((100.0 * coefficient_of_variation) < PKA_THRESHOLD) && 
        (gpu_sim_cycle > 5000) && 
-      (m_shader_stats->ctas_completed > 32))
+      ((m_shader_stats->ctas_completed > 32) || (total_ctas < 32)))
         return true;
   return false;
 }
